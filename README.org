@@ -1,0 +1,334 @@
+#+TITLE: TPM Fundamentals
+#+AUTHOR: Wiktor Kwapisiewicz <wiktor@sequoia-pgp.org>
+#+DATE: July 14, 2022
+#+OPTIONS: H:2 toc:nil num:t
+#+startup: beamer
+#+LATEX_CLASS: beamer
+#+LATEX_CLASS_OPTIONS: [presentation]
+#+LATEX_HEADER: \usebackgroundtemplate{\includegraphics[width=\paperwidth,height=\paperheight]{watermark.pdf}}
+#+BEAMER_HEADER: \title[TPM in Sequoia PGP]{TPM Adventures}
+#+BEAMER_HEADER: \titlegraphic{Quotes and page references from:\\ \vspace{3mm} \url{https://link.springer.com/book/10.1007/978-1-4302-6584-9}}
+#+BEAMER_HEADER: \beamertemplatenavigationsymbolsempty
+#+BEAMER_HEADER: \setbeamertemplate{footline}[frame number]{}
+#+BEAMER_THEME: Madrid
+#+COLUMNS: %45ITEM %10BEAMER_ENV(Env) %10BEAMER_ACT(Act) %4BEAMER_COL(Col) %8BEAMER_OPT(Opt)
+
+# Convert to PDF using: C-c C-e l P
+
+* TPM Adventures
+
+# Okay, this will be a presentation about TPM fundamentals so that
+# reading documentation about TPMs or API calls can make more sense.
+
+# Almost everything I know is based on this single freely available "A
+# Practical Guide to TPM 2.0" book and from reading the spec but the
+# book is highly recommended as it contains quite a lot of use cases
+# and real-world examples.
+
+** HMACs / KDFs
+  - a = =0x5858 b47d=
+    - a \otimes =0x41f5 24f8= = =0x2630 c841=
+    - a \otimes =0x653d 3893= = =0xa361 875d=
+    - a \otimes =0xbc4e 60e5= = =0x3f8d 6db7=
+    - a \otimes =0x41f5 24f8= = =0x2630 c841=
+
+# The first thing one needs to understand when working with TPMs is
+# that quite a lot of things are derived deterministically using HMACs
+# or KDFs.
+
+# As a quick refresher: if we have a value here "a" and HMAC it with
+# some other value we get a result. Now the result depends only on
+# both parameters so if they are the same then the result stays the
+# same.
+
+# Another interesting aspect: if we keep the value of "a" secret then
+# even if the other input to the HMAC is public the result can still
+# stay secret even when the HMAC construction is also publicly known.
+  
+** Primary keys
+  - a = =0x5858 b47d= (key hierarchy seed)
+    - a \otimes =0x41f5 24f8= (key template #1) = =0x2630 c841= (private key seed)
+    - a \otimes =0x653d 3893= (key template #2) = =0xa361 875d=
+    - a \otimes =0xbc4e 60e5= (key template #3) = =0x3f8d 6db7=
+    - a \otimes =0x41f5 24f8= (key template #1) = =0x2630 c841=
+
+# This is actually the design behind the "unlimited keys" feature of
+# TPM. TPM contains a "key hierarchy seed" value that is secret and
+# never revealed. The user supplies a "public key templates" and the
+# result is a private key seed. The seed is not directly a private key
+# bits but rather an input to the function that will generate the
+# private key bits in a deterministic way.
+
+# We'll go into more details on what the template contains but for now
+# it's sufficient to know it's mostly key usage flags like signing or
+# decryption and the exact algorithm specification e.g. RSA 2k.
+
+# Quite a lot of facts can be inferred from this design: for example
+# if someone knows the key template and the hierarchy seed did not
+# change they can always regenerate the key. Imagine storing the
+# template in the public subkey packet - it already contains
+# information about the algorithm specification. You don't need any
+# external identifiers for the key e.g. key handles.
+
+# This is actually the same design that's used by U2F tokens to store
+# "unlimited" number of credentials. They just generate them on the
+# fly based on the domain name and some data provided by the service
+# and the internal seed that's burned during manufacturing process.
+  
+c.f. U2F key generation.
+
+# As for the persistence, once a key is generated it can be persisted
+# and this helps mostly for performance especially for big RSA
+# keys. This is not that important for EC keys.
+
+#+BEGIN_QUOTE
+Only a limited number of keys can be persistent, but the TPM can handle an
+unlimited number of keys. (p. 123)
+#+END_QUOTE
+
+Can be made persistent ("evict") but don't have to.
+
+** Hierarchies
+  - platform (UEFI)
+  - owner / storage
+  - endorsement (privacy CA, p. 111)
+  - null (not permanent)
+
+# We've talked about key hierarchy seed but what exactly is the key
+# hierarchy? TPM 2.0 contains four hierarchies that are always present
+# but have different policies and use cases.
+
+# First, there's the platform hierarchy used by the hardware vendor
+# for their own purposes like UEFI secure boot. This hierarchy is
+# always present but cannot be used by the end-user. The idea is that
+# the vendor may need to do cryptographic operations even if the user
+# disables everything else.
+
+# Owner hierarchy is the main hierarchy that's in use by the
+# end-users. In the earlier TPM 1.2 spec there was only one hierarchy
+# and this is exactly that hierarchy although in the older spec it was
+# called "storage" hierarchy.
+
+# There's also the "endorsement" hierarchy that's related to
+# attestation that is proving that keys are generated in the
+# TPM. Since this could leak the exact TPM model and vendor this kind
+# of features are strictly separated into their own hierarchy that can
+# be disabled by the end-user.
+
+# And there's also the null hierarchy that's used for ephemeral
+# cryptographic operations.
+
+# Now, each hierarchy has their own key hierarchy seed value. As for
+# the platform hierarchy it's off-limits to end-users so the seed
+# value is selected by the system firmware on boot. For the owner
+# hierarchy things start to look more interesting: the system
+# administrator can rotate or re-seed the value. As we've seen in the
+# HMAC construction this has ripple effect on the entire key hierarchy
+# and makes all TPM keys generated so far totally unusable. This kind
+# of drastic measures is done for example when selling a computer or
+# otherwise disposing it.
+
+# The null hierarchy's seed is randomly generated on each reboot so
+# any object that's in the null hierarchy will be ephemeral and last
+# only until the reboot. This makes it perfect for storing cached
+# passwords and this hierarchy is internally used by the TPM for
+# sessions and context management. No objects can be made persistent
+# in the null hierarchy.
+  
+All (except null):    
+  - cannot be deleted but may be disabled.
+
+p. 97
+
+** Key templates
+
+Keys type:
+  - RSA keys
+  - EC keys
+  - symmetric keys
+  - HMAC keys
+
+Attributes:
+  - fixedTPM - cannot leave TPM,
+  - fixedParent - cannot change parent,
+  - primary or not
+  - key usage flags (signing, decryption, restricted)
+  - unique value
+
+Key usage policy.
+
+p. 119
+
+# Key templates are public parts that are supplied to the TPM for the
+# key generation. They don't contain public keys but rather attributes
+# and algorithm specification that the key should have.
+
+# Unique value has an important role: since the same key template will
+# result in the same key if one wants to have for example two RSA 2k
+# signing keys they'd get the same key twice. Unique allows
+# influencing this process and is basically a buffer that one can fill
+# with random data to get two different keys.
+
+** Restricted signing key
+
+  - quote: attestation structures (PCR status)
+  - will sign only data digested in the TPM
+  - can sign external data if it doesn't begin with =TPM_GENERATED=
+    (0xff544347, 0xff T C G)
+  - uses tickets
+    
+p. 128
+
+https://ebrary.net/24770/computer_science/restricted_signing
+
+# As for the restricted attribute, it can be added to signing or
+# decryption keys and the effect varies.
+
+# Restricted signing keys are used for signing data that describes TPM
+# state, these are called "quotes". They can also sign any other
+# regular, external data, if the data does not start with the magic
+# TPM_GENERATED value.
+
+# It's interesting to see how the TPM enforces it - one needs to hash
+# the data using TPM and as a result one gets the digest value as well
+# as a opaque "ticket" value that then is supplied along with the
+# digest to the signing routine. So restricted signing keys always
+# need a valid ticket to "see" what they are signing.
+
+** Restricted decryption key
+
+  - decrypts only specially formatted data
+  - never reveals the plaintext
+
+Key hierarchy:
+  - primary key #1
+    - key #2
+      - key #3 (leaf)
+      - key #4 (leaf)
+    - key #5 (leaf)
+
+# Restricted decryption keys never reveal plaintext of the decryption
+# and the data needs to be specially formatted for the decryption to
+# work. Sounds like a serious issue but in reality they are used to
+# wrap children keys so that keys can form a tree-like structure with
+# primary keys as roots. Note that any key that is a parent needs to
+# have restricted decryption attributes set and only the leaf keys can
+# be non-restricted or non-decryption keys.
+
+# Primary keys can still be signing-only keys but then they could not
+# be parents of the key tree.
+
+** Authorization and policies
+  - password
+  - HMAC
+  - signature
+  - signature with data
+  - PCR values
+  - signature over PCR values
+  - command locality (CPU),
+  - time
+  - NV counters and indices (revocation, p. 141)
+  - duplication target
+
+# Authorization is actually a quite complex domain in TPMs as besides
+# the regular passwords and bytes one can ask the key to be usable
+# only when a signature is supplied or the system is in a given state.
+
+# To make things more interesting these policies can also be combined
+# using regular AND and OR conditions so one can ask for either a user
+# password or three signatures from the IT admins groups to unlock the
+# decryption keys.
+
+# I haven't actually explored this in much detail but I used the
+# duplication target policy to allow key duplication to another parent
+# I've seen one can build policies that for example make the key
+# revoked if a counter is incremented.
+
+#  Compound policies pic p. 244
+
+** PCRs
+
+Minimum 24 PCRs organized in banks (SHA-1, SHA-256; p. 152).
+
+  - =0= - BIOS
+  - =1= - BIOS configuration
+  - =2= - Option ROM
+  - =3= - Option ROM configuration
+  - =4= - MBR
+  - =5= - MBR configuration
+  - =6= - State transition
+  - =7= - Platform manufacturer
+  - =8-15= - Static operating system
+  - =16= - Debug
+
+Most PCRs cannot be reset, only extended (p. 98):
+
+  - 0x0000 0000 \otimes **0x41f5 24f8** = 0x2630 c841
+  - 0x2630 c841 \otimes **0x26e4 13ee** = 0x4220 3f18
+  - 0x4220 3f18 \otimes **0x8470 26aa** = 0x8f58 8ece
+
+# PCRs are special registers organized in banks. The system firmware
+# then "measures" various components influencing the PCR values. As
+# you can see the higher the number the closer to the end-user the
+# component gets.
+
+# One interesting design here is that the PCRs are usually never
+# cleared but rather "extended" and that basically means supplying
+# input bytes that are HMACed with the value in the PCR to produce a
+# new value.
+
+# This for example could be used to keep track of all values that are
+# for example signed.
+  
+** Quote
+
+Attestations of TPM state:
+  - magic number
+  - qualified name of signing key
+  - extra data provided by caller
+  - TPM firmware version
+  - TPM clock state (sometimes obfuscated)
+  - boot count
+  - PCRs
+  - digest
+
+p. 158
+
+# Quote is an attestation document that captures some elements of the
+# TPM state. This can be used as a remote attestation mechanism where
+# the client asks the server to provide proof of the system state
+# eg. that the BIOS have not been tampered with.
+
+** NV indices
+  - counters (64 bit values), only increments
+  - bitfields (64 bit), bits can be set but never cleared
+    Use case: multiple user revocation
+  - extend index
+    Use case: secure audit log (p. 142)
+  - hybrid index (write only on orderly shutdown)
+
+# The last piece of the puzzle are NV indices that is non-volatile
+# memory inside of the TPM. They can be combined with key policies to
+# provide fine grained access to the key.
+
+# I've never actually used them.
+  
+** Other trivia about TPMs
+
+  - Dictionary lockout: lock out a user for 24 hours after 5 password entry failures.
+  - built-in RNG
+  - high quality simulator (tpm2-tss)
+  - https://docs.rs/tss-esapi/latest/tss_esapi/struct.Context.html
+    
+# And a couple of bits that I couldn't find a slide for. The keys can
+# be configured to use a dictionary lockout for passwords. TPMs have a
+# built-in random number generator and there is a simulator package
+# that quite well reproduces real hardware. With some minor tweaks
+# like for example my Dell TPM did not like RSA 1k and the simulator
+# did not care.
+
+# For the list of high level functions one can do with a TPM check out
+# the Context struct from the tss-esapi crate. This should give a good
+# overview of what's available.
+
+# Thanks!

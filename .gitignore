@@ -1,0 +1,6 @@
+.#*
+*.pdf
+*.tex
+!watermark.pdf
+*#
+*~
