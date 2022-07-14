@@ -1,0 +1,12 @@
+pages:
+  script:
+    - apt-get update -yqq
+    - apt-get install -yqq --no-install-recommends emacs org-mode texlive-latex-extra texlive-latex-base texlive-generic-recommended texlive-fonts-recommended
+    - emacs -Q --batch README.org -f org-beamer-export-to-pdf
+    - mkdir public
+    - mv README.pdf public/tpm-fundamentals.pdf
+  artifacts:
+    paths:
+      - public
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
